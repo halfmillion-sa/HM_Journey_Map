@@ -2338,11 +2338,12 @@ window.replacePersist = (fn) => { persist = fn; };
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  initializeFirestore,
+  getFirestore,
   doc,
   setDoc,
   getDoc,
-  onSnapshot
+  onSnapshot,
+  serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -2352,11 +2353,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-
-const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
-  useFetchStreams: false
-});
+const db = getFirestore(app);
 
 const remoteDocRef = doc(db, "hm_journey", "main");
 
@@ -2383,28 +2380,30 @@ function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7
 
 async function ensureRemoteInitialized() {
   try {
-    console.log("Trying Firestore...");
-    console.log("navigator.onLine =", navigator.onLine);
-
     const snap = await getDoc(remoteDocRef);
-    console.log("Firestore connected. Exists =", snap.exists());
 
-    if (!snap.exists()) {
+    if (snap.exists() && snap.data()?.store) {
+      const remoteStore = snap.data().store;
+      isApplyingRemoteUpdate = true;
+      window.setAppStore(remoteStore);
+      localStorage.setItem(window.getStorageKey(), JSON.stringify(remoteStore));
+      window.renderAllApp();
+      setTimeout(() => { isApplyingRemoteUpdate = false; }, 200);
+    } else {
       await setDoc(remoteDocRef, {
         store: window.getAppStore(),
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp()
       });
     }
 
     remoteReady = true;
     setSyncState("Firebase Live Sync", "Cloud mode active");
+
     if (window.showNotifyApp) {
       window.showNotifyApp("تم تفعيل المزامنة السحابية");
     }
   } catch (err) {
-    console.error("Firebase init error full:", err);
-    console.log("navigator.onLine at init =", navigator.onLine);
-
+    console.error("Firebase init error:", err);
     setSyncState(
       "Sync Error",
       err?.message || "Firebase init failed",
@@ -2417,15 +2416,13 @@ async function ensureRemoteInitialized() {
     }
   }
 }
+
 onSnapshot(
   remoteDocRef,
   (snapshot) => {
     if (!snapshot.exists()) return;
-
     const data = snapshot.data();
-    if (!data || !data.store) return;
-
-    remoteReady = true;
+    if (!data?.store) return;
 
     const incoming = JSON.stringify(data.store);
     const current = JSON.stringify(window.getAppStore());
@@ -2464,6 +2461,7 @@ onSnapshot(
       "rgba(192,80,80,.12)",
       "#c05050"
     );
+
     if (window.showNotifyApp) {
       window.showNotifyApp("خطأ Firebase Listener: " + (error?.message || "Unknown error"));
     }
@@ -2483,7 +2481,7 @@ window.replacePersist(function (notifyText = "") {
     try {
       await setDoc(remoteDocRef, {
         store: window.getAppStore(),
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp()
       });
       setSyncState("Firebase Live Sync", "Saved to cloud");
     } catch (err) {
@@ -2494,11 +2492,12 @@ window.replacePersist(function (notifyText = "") {
         "rgba(192,80,80,.12)",
         "#c05050"
       );
+
       if (window.showNotifyApp) {
         window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
       }
     }
-  }, 250);
+  }, 300);
 });
 
 ensureRemoteInitialized();
