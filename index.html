@@ -1,36 +1,57 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>لوحة المشاريع</title>
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-<style>
-:root {
-  --bg: #f0ebe2;
-  --surface: #faf7f2;
-  --surface2: #ece7de;
-  --border: rgba(0,0,0,0.08);
-  --border2: rgba(0,0,0,0.13);
-  --text: #1a1a18;
-  --muted: #888070;
-  --muted2: #6b6357;
-  --accent: #6aab98;
-  --accent-dark: #4d8f7e;
-  --accent-light: rgba(106,171,152,0.13);
-  --amber: #c9883a;
-  --amber-light: rgba(201,136,58,0.12);
-  --red: #c05050;
-  --red-light: rgba(192,80,80,0.12);
-  --blue: #5278a8;
-  --blue-light: rgba(82,120,168,0.12);
-  --shadow: 0 2px 12px rgba(0,0,0,0.07);
-  --shadow-lg: 0 8px 32px rgba(0,0,0,0.1);
-  --radius: 16px;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// بيانات Firebase (غيرها من حسابك)
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// مستند واحد فقط يحمل كل الداتا
+const docRef = doc(db, "hm_journey", "main");
+
+// ===============================
+// 1) تحميل البيانات مباشرة (Realtime)
+// ===============================
+onSnapshot(docRef, (snapshot) => {
+  if (snapshot.exists()) {
+    const data = snapshot.data();
+
+    if (data.store) {
+      // استبدال الداتا الحالية بدون ما نغير النظام
+      window.store = data.store;
+
+      // إعادة رسم الصفحة (مهم)
+      if (typeof renderAll === "function") renderAll();
+      if (typeof renderProjects === "function") renderProjects();
+      if (typeof renderDashboard === "function") renderDashboard();
+      if (typeof renderActivity === "function") renderActivity();
+    }
+  }
+});
+
+// ===============================
+// 2) حفظ أي تحديث تلقائي للجميع
+// ===============================
+
+// نخلي أي حفظ عندك يرسل لـ Firebase
+const originalSave = window.saveData || function(){};
+
+window.saveData = async function () {
+  // شغل الحفظ القديم (localStorage)
+  originalSave();
+
+  // ارفع البيانات لـ Firebase
+  await setDoc(docRef, {
+    store: window.store
+  });
+};
+</script>
 body {
   font-family:'Cairo',sans-serif;
   background:var(--bg);
