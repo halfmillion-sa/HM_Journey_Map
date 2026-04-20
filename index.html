@@ -2338,12 +2338,11 @@ window.replacePersist = (fn) => { persist = fn; };
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getFirestore,
+  initializeFirestore,
   doc,
   setDoc,
   getDoc,
-  onSnapshot,	
-  serverTimestamp
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -2353,20 +2352,21 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+  useFetchStreams: false
+});
 
 const remoteDocRef = doc(db, "hm_journey", "main");
 
-let isApplyingRemoteUpdate = false;
+const CLIENT_ID = "client_" + Math.random().toString(36).slice(2, 10);
 let remoteReady = false;
+let isApplyingRemoteUpdate = false;
 let saveTimer = null;
+let lastRemoteRevision = 0;
 
 function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7e") {
-  if (window.setSyncStateLocal) {
-    window.setSyncStateLocal(label, hint, bg, color);
-    return;
-  }
-
   const syncTag = document.getElementById("syncTag");
   const syncModeHint = document.getElementById("syncModeHint");
 
@@ -2378,26 +2378,90 @@ function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7
   }
 }
 
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function getWrappedPayload(storeObj) {
+  return {
+    store: deepClone(storeObj),
+    revision: Date.now(),
+    updatedAtISO: new Date().toISOString(),
+    updatedBy: CLIENT_ID
+  };
+}
+
+async function pushToCloud(reason = "manual") {
+  if (!remoteReady || isApplyingRemoteUpdate) return;
+
+  try {
+    const payload = getWrappedPayload(window.getAppStore());
+    lastRemoteRevision = payload.revision;
+
+    await setDoc(remoteDocRef, payload, { merge: true });
+
+    setSyncState(
+      "Firebase Live Sync",
+      reason === "autosave" ? "Saved to cloud" : "Synced",
+      "rgba(106,171,152,.15)",
+      "#4d8f7e"
+    );
+  } catch (err) {
+    console.error("Firebase save error:", err);
+    setSyncState(
+      "Save Error",
+      err?.message || "Write failed",
+      "rgba(192,80,80,.12)",
+      "#c05050"
+    );
+    if (window.showNotifyApp) {
+      window.showNotifyApp("فشل الحفظ في Firebase");
+    }
+  }
+}
+
 async function ensureRemoteInitialized() {
   try {
+    setSyncState(
+      "Connecting...",
+      "Checking cloud",
+      "rgba(82,120,168,.12)",
+      "#5278a8"
+    );
+
     const snap = await getDoc(remoteDocRef);
 
-    if (snap.exists() && snap.data()?.store) {
-      const remoteStore = snap.data().store;
-      isApplyingRemoteUpdate = true;
-      window.setAppStore(remoteStore);
-      localStorage.setItem(window.getStorageKey(), JSON.stringify(remoteStore));
-      window.renderAllApp();
-      setTimeout(() => { isApplyingRemoteUpdate = false; }, 200);
+    if (snap.exists()) {
+      const data = snap.data();
+      const remoteStore = data?.store;
+      const remoteRevision = Number(data?.revision || 0);
+
+      if (remoteStore) {
+        isApplyingRemoteUpdate = true;
+        lastRemoteRevision = remoteRevision;
+
+        window.setAppStore(remoteStore);
+        localStorage.setItem(window.getStorageKey(), JSON.stringify(remoteStore));
+        window.renderAllApp();
+
+        setTimeout(() => {
+          isApplyingRemoteUpdate = false;
+        }, 250);
+      }
     } else {
-      await setDoc(remoteDocRef, {
-        store: window.getAppStore(),
-        updatedAt: serverTimestamp()
-      });
+      const payload = getWrappedPayload(window.getAppStore());
+      lastRemoteRevision = payload.revision;
+      await setDoc(remoteDocRef, payload);
     }
 
     remoteReady = true;
-    setSyncState("Firebase Live Sync", "Cloud mode active");
+
+    setSyncState(
+      "Firebase Live Sync",
+      "Cloud mode active",
+      "rgba(106,171,152,.15)",
+      "#4d8f7e"
+    );
 
     if (window.showNotifyApp) {
       window.showNotifyApp("تم تفعيل المزامنة السحابية");
@@ -2410,9 +2474,8 @@ async function ensureRemoteInitialized() {
       "rgba(192,80,80,.12)",
       "#c05050"
     );
-
     if (window.showNotifyApp) {
-      window.showNotifyApp("فشل ربط Firebase: " + (err?.message || "Unknown error"));
+      window.showNotifyApp("فشل ربط Firebase");
     }
   }
 }
@@ -2421,24 +2484,62 @@ onSnapshot(
   remoteDocRef,
   (snapshot) => {
     if (!snapshot.exists()) return;
+
     const data = snapshot.data();
     if (!data?.store) return;
 
-    const incoming = JSON.stringify(data.store);
-    const current = JSON.stringify(window.getAppStore());
+    const remoteRevision = Number(data.revision || 0);
+    const remoteStore = data.store;
+    const remoteUpdatedBy = data.updatedBy || "";
 
-    if (incoming === current) {
-      setSyncState("Firebase Live Sync", "Synced");
+    if (remoteUpdatedBy === CLIENT_ID) {
+      setSyncState(
+        "Firebase Live Sync",
+        "Saved to cloud",
+        "rgba(106,171,152,.15)",
+        "#4d8f7e"
+      );
       return;
     }
 
-    isApplyingRemoteUpdate = true;
+    if (remoteRevision && remoteRevision <= lastRemoteRevision) {
+      setSyncState(
+        "Firebase Live Sync",
+        "Synced",
+        "rgba(106,171,152,.15)",
+        "#4d8f7e"
+      );
+      return;
+    }
+
+    const incoming = JSON.stringify(remoteStore);
+    const current = JSON.stringify(window.getAppStore());
+
+    if (incoming === current) {
+      lastRemoteRevision = remoteRevision;
+      setSyncState(
+        "Firebase Live Sync",
+        "Synced",
+        "rgba(106,171,152,.15)",
+        "#4d8f7e"
+      );
+      return;
+    }
 
     try {
-      window.setAppStore(data.store);
-      localStorage.setItem(window.getStorageKey(), JSON.stringify(data.store));
+      isApplyingRemoteUpdate = true;
+      lastRemoteRevision = remoteRevision;
+
+      window.setAppStore(remoteStore);
+      localStorage.setItem(window.getStorageKey(), JSON.stringify(remoteStore));
       window.renderAllApp();
-      setSyncState("Firebase Live Sync", "Synced");
+
+      setSyncState(
+        "Firebase Live Sync",
+        "Updated from cloud",
+        "rgba(106,171,152,.15)",
+        "#4d8f7e"
+      );
     } catch (err) {
       console.error("Apply remote update error:", err);
       setSyncState(
@@ -2447,11 +2548,11 @@ onSnapshot(
         "rgba(192,80,80,.12)",
         "#c05050"
       );
+    } finally {
+      setTimeout(() => {
+        isApplyingRemoteUpdate = false;
+      }, 250);
     }
-
-    setTimeout(() => {
-      isApplyingRemoteUpdate = false;
-    }, 200);
   },
   (error) => {
     console.error("Firebase listener error:", error);
@@ -2461,9 +2562,8 @@ onSnapshot(
       "rgba(192,80,80,.12)",
       "#c05050"
     );
-
     if (window.showNotifyApp) {
-      window.showNotifyApp("خطأ Firebase Listener: " + (error?.message || "Unknown error"));
+      window.showNotifyApp("خطأ Firebase Listener");
     }
   }
 );
@@ -2477,27 +2577,30 @@ window.replacePersist(function (notifyText = "") {
   if (!remoteReady) return;
 
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    try {
-      await setDoc(remoteDocRef, {
-        store: window.getAppStore(),
-        updatedAt: serverTimestamp()
-      });
-      setSyncState("Firebase Live Sync", "Saved to cloud");
-    } catch (err) {
-      console.error("Firebase save error:", err);
-      setSyncState(
-        "Save Error",
-        err?.message || "Write failed",
-        "rgba(192,80,80,.12)",
-        "#c05050"
-      );
+  saveTimer = setTimeout(() => {
+    pushToCloud("autosave");
+  }, 400);
+});
 
-      if (window.showNotifyApp) {
-        window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
-      }
-    }
-  }, 300);
+window.addEventListener("online", () => {
+  if (remoteReady) {
+    setSyncState(
+      "Firebase Live Sync",
+      "Back online",
+      "rgba(106,171,152,.15)",
+      "#4d8f7e"
+    );
+    pushToCloud("online");
+  }
+});
+
+window.addEventListener("offline", () => {
+  setSyncState(
+    "Offline Mode",
+    "Waiting for internet",
+    "rgba(201,136,58,.12)",
+    "#c9883a"
+  );
 });
 
 ensureRemoteInitialized();
