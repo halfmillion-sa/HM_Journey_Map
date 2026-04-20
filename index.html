@@ -2319,7 +2319,7 @@ import {
   getFirestore,
   doc,
   setDoc,
-  getDoc
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -2332,28 +2332,35 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const ref = doc(db, "hm_journey", "main");
 
-async function testFirebase() {
+// 🔥 الاستماع المباشر (هنا السر)
+onSnapshot(ref, (snapshot) => {
+  if (!snapshot.exists()) return;
+
+  const data = snapshot.data();
+
+  if (data && data.store) {
+    window.setAppStore(data.store);
+    localStorage.setItem(window.getStorageKey(), JSON.stringify(data.store));
+    window.renderAllApp();
+    console.log("🔥 تم التحديث من Firebase");
+  }
+});
+
+// 🔥 الحفظ عند أي تغيير
+const originalPersist = window.getPersist();
+
+window.replacePersist(async function () {
+  originalPersist();
+
   try {
     await setDoc(ref, {
-      test: "connected",
-      time: new Date().toISOString()
-    }, { merge: true });
-
-    const snap = await getDoc(ref);
-
-    if (snap.exists()) {
-      console.log("Firebase OK:", snap.data());
-      alert("Firebase شغال ✅");
-    } else {
-      alert("المستند غير موجود لكن الاتصال شغال");
-    }
+      store: window.getAppStore(),
+      updatedAt: new Date().toISOString()
+    });
+    console.log("✅ تم الحفظ في Firebase");
   } catch (e) {
-    console.error("Firebase error:", e);
-    alert("Firebase Error: " + e.message);
+    console.error("❌ خطأ الحفظ:", e);
   }
-}
-
-testFirebase();
-</script>
-</body>
+});
+</script></body>
 </html>
