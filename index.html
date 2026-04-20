@@ -2354,10 +2354,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
-  useFetchStreams: false
+  experimentalForceLongPolling: true
 });
-
 const remoteDocRef = doc(db, "hm_journey", "main");
 
 let isApplyingRemoteUpdate = false;
