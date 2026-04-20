@@ -2320,7 +2320,8 @@ import {
   doc,
   setDoc,
   getDoc,
-  onSnapshot
+  onSnapshot,
+  serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -2329,44 +2330,124 @@ const firebaseConfig = {
   projectId: "a01221"
 };
 
+const CLOUD_COLLECTION = "hm_journey";
+const CLOUD_DOCUMENT = "main";
+
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
-const remoteDocRef = doc(db, "hm_journey", "main");
+const remoteDocRef = doc(db, CLOUD_COLLECTION, CLOUD_DOCUMENT);
 
 let isApplyingRemoteUpdate = false;
 let remoteReady = false;
+let firstSnapshotLoaded = false;
+let cloudWriteTimer = null;
+let lastCloudHash = "";
+
+function serializeStore(value) {
+  return JSON.stringify(value || {});
+}
+
+function cloneStore(value) {
+  return JSON.parse(serializeStore(value));
+}
+
+function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7e") {
+  const syncTag = document.getElementById("syncTag");
+  const syncModeHint = document.getElementById("syncModeHint");
+
+  if (syncTag) syncTag.textContent = label;
+  if (syncModeHint) {
+    syncModeHint.textContent = hint;
+    syncModeHint.style.background = bg;
+    syncModeHint.style.color = color;
+  }
+}
+
+function getStateText(key) {
+  const isArabic = document.documentElement.dir === "rtl";
+  const map = {
+    connecting: isArabic ? ["جارِ الربط", "Connecting to cloud..."] : ["Connecting", "Connecting to cloud..."],
+    active: isArabic ? ["مزامنة Firebase", "Cloud mode active"] : ["Firebase Sync", "Cloud mode active"],
+    synced: isArabic ? ["مزامنة Firebase", "Synced"] : ["Firebase Sync", "Synced"],
+    saving: isArabic ? ["مزامنة Firebase", "Saving..."] : ["Firebase Sync", "Saving..."],
+    saved: isArabic ? ["مزامنة Firebase", "Saved to cloud"] : ["Firebase Sync", "Saved to cloud"],
+    offline: isArabic ? ["بدون اتصال", "Offline mode"] : ["Offline", "Offline mode"],
+    error: isArabic ? ["خطأ مزامنة", "Check console"] : ["Sync Error", "Check console"],
+  };
+  return map[key] || map.active;
+}
+
+function applyState(key, hintOverride, bg, color) {
+  const [label, hint] = getStateText(key);
+  setSyncState(label, hintOverride || hint, bg, color);
+}
+
+async function writeCloudNow(showSavedState = true) {
+  if (isApplyingRemoteUpdate || !remoteReady) return;
+
+  const currentStore = cloneStore(window.getAppStore());
+  const currentHash = serializeStore(currentStore);
+  if (currentHash === lastCloudHash) return;
+
+  try {
+    applyState("saving");
+    await setDoc(remoteDocRef, {
+      store: currentStore,
+      updatedAt: serverTimestamp(),
+      updatedAtISO: new Date().toISOString()
+    });
+    lastCloudHash = currentHash;
+    if (showSavedState) applyState("saved");
+  } catch (err) {
+    console.error("Firebase save error:", err);
+    setSyncState(
+      document.documentElement.dir === "rtl" ? "خطأ حفظ" : "Save Error",
+      err?.message || "Write failed",
+      "rgba(192,80,80,.12)",
+      "#c05050"
+    );
+    window.showNotifyApp((document.documentElement.dir === "rtl" ? "فشل الحفظ في Firebase: " : "Firebase save failed: ") + (err?.message || "Unknown error"));
+  }
+}
+
+function queueCloudWrite() {
+  clearTimeout(cloudWriteTimer);
+  cloudWriteTimer = setTimeout(() => {
+    writeCloudNow(true);
+  }, 350);
+}
 
 async function ensureRemoteInitialized() {
   try {
+    applyState("connecting");
     const snap = await getDoc(remoteDocRef);
 
     if (!snap.exists()) {
-      await setDoc(remoteDocRef, { store: window.getAppStore() });
+      const initialStore = cloneStore(window.getAppStore());
+      await setDoc(remoteDocRef, {
+        store: initialStore,
+        updatedAt: serverTimestamp(),
+        updatedAtISO: new Date().toISOString()
+      });
+      lastCloudHash = serializeStore(initialStore);
+    } else {
+      const data = snap.data();
+      if (data && data.store) {
+        lastCloudHash = serializeStore(data.store);
+      }
     }
 
     remoteReady = true;
-
-    const syncTag = document.getElementById("syncTag");
-    const syncModeHint = document.getElementById("syncModeHint");
-
-    if (syncTag) syncTag.textContent = "Firebase Live Sync";
-    if (syncModeHint) {
-      syncModeHint.textContent = "Cloud mode";
-      syncModeHint.style.background = "rgba(106,171,152,.15)";
-      syncModeHint.style.color = "#4d8f7e";
-    }
+    applyState("active");
   } catch (err) {
     console.error("Firebase init error:", err);
-
-    const syncTag = document.getElementById("syncTag");
-    const syncModeHint = document.getElementById("syncModeHint");
-
-    if (syncTag) syncTag.textContent = "Sync Error";
-    if (syncModeHint) {
-      syncModeHint.textContent = "Firebase failed";
-      syncModeHint.style.background = "rgba(192,80,80,.12)";
-      syncModeHint.style.color = "#c05050";
-    }
+    setSyncState(
+      document.documentElement.dir === "rtl" ? "خطأ ربط" : "Sync Error",
+      err?.message || "Firebase init failed",
+      "rgba(192,80,80,.12)",
+      "#c05050"
+    );
+    window.showNotifyApp((document.documentElement.dir === "rtl" ? "فشل ربط Firebase: " : "Firebase init failed: ") + (err?.message || "Unknown error"));
   }
 }
 
@@ -2378,16 +2459,36 @@ onSnapshot(
     const data = snapshot.data();
     if (!data || !data.store) return;
 
-    const incoming = JSON.stringify(data.store);
-    const current = JSON.stringify(window.getAppStore());
+    const incomingHash = serializeStore(data.store);
+    const currentHash = serializeStore(window.getAppStore());
+    lastCloudHash = incomingHash;
 
-    if (incoming === current) return;
+    if (!firstSnapshotLoaded) {
+      firstSnapshotLoaded = true;
+    }
+
+    if (incomingHash === currentHash) {
+      applyState("synced");
+      return;
+    }
 
     isApplyingRemoteUpdate = true;
 
-    window.setAppStore(data.store);
-    localStorage.setItem(window.getStorageKey(), JSON.stringify(data.store));
-    window.renderAllApp();
+    try {
+      const clonedIncoming = cloneStore(data.store);
+      window.setAppStore(clonedIncoming);
+      localStorage.setItem(window.getStorageKey(), serializeStore(clonedIncoming));
+      window.renderAllApp();
+      applyState("synced");
+    } catch (err) {
+      console.error("Apply remote update error:", err);
+      setSyncState(
+        document.documentElement.dir === "rtl" ? "خطأ عرض" : "Render Error",
+        err?.message || "Failed to apply remote data",
+        "rgba(192,80,80,.12)",
+        "#c05050"
+      );
+    }
 
     setTimeout(() => {
       isApplyingRemoteUpdate = false;
@@ -2395,34 +2496,30 @@ onSnapshot(
   },
   (error) => {
     console.error("Firebase listener error:", error);
-
-    const syncTag = document.getElementById("syncTag");
-    const syncModeHint = document.getElementById("syncModeHint");
-
-    if (syncTag) syncTag.textContent = "Listener Error";
-    if (syncModeHint) {
-      syncModeHint.textContent = "Check console";
-      syncModeHint.style.background = "rgba(192,80,80,.12)";
-      syncModeHint.style.color = "#c05050";
-    }
+    setSyncState(
+      document.documentElement.dir === "rtl" ? "خطأ الاستماع" : "Listener Error",
+      error?.message || "Check Firestore rules",
+      "rgba(192,80,80,.12)",
+      "#c05050"
+    );
+    window.showNotifyApp((document.documentElement.dir === "rtl" ? "خطأ Firebase Listener: " : "Firebase listener error: ") + (error?.message || "Unknown error"));
   }
 );
 
 const originalPersist = window.getPersist();
-
-window.replacePersist(async function (notifyText = '') {
+window.replacePersist(function (notifyText = '') {
   originalPersist(notifyText);
+  if (isApplyingRemoteUpdate || !remoteReady) return;
+  queueCloudWrite();
+});
 
-  if (isApplyingRemoteUpdate) return;
-  if (!remoteReady) return;
+window.addEventListener("online", () => {
+  if (remoteReady) queueCloudWrite();
+  applyState("active");
+});
 
-  try {
-    await setDoc(remoteDocRef, {
-      store: window.getAppStore()
-    });
-  } catch (err) {
-    console.error("Firebase save error:", err);
-  }
+window.addEventListener("offline", () => {
+  applyState("offline", undefined, "rgba(201,136,58,.12)", "#c9883a");
 });
 
 ensureRemoteInitialized();
