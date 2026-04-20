@@ -662,26 +662,26 @@ body::before {
 </div>
 
 <script>
-let lang = 'ar';
-let editingProjectId = null;
-let currentSection = 'dashboard';
-let activityPage = 1;
+var lang = 'ar';
+var editingProjectId = null;
+var currentSection = 'dashboard';
+var activityPage = 1;
 const ACTIVITY_PAGE_SIZE = 10;
-let selectedProjectId = 1;
-let selectedTouchId = null;
-let touchProjectId = null;
-let aiChart = null;
-let statusChart = null;
-let progressChart = null;
-let departmentChart = null;
-let touchStatusChart = null;
-let aiDeptProgressChart = null;
-let aiStatusMixChart = null;
-let aiTouchStatusMiniChart = null;
-let aiOverdueMiniChart = null;
-const STORAGE_KEY = 'projects_hub_live_v3';
-const LANG_KEY = 'projects_hub_lang_v1';
-const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('projects_hub_live_v3') : null;
+var selectedProjectId = 1;
+var selectedTouchId = null;
+var touchProjectId = null;
+var aiChart = null;
+var statusChart = null;
+var progressChart = null;
+var departmentChart = null;
+var touchStatusChart = null;
+var aiDeptProgressChart = null;
+var aiStatusMixChart = null;
+var aiTouchStatusMiniChart = null;
+var aiOverdueMiniChart = null;
+var STORAGE_KEY = 'projects_hub_live_v3';
+var LANG_KEY = 'projects_hub_lang_v1';
+var bc = ('BroadcastChannel' in window) ? new BroadcastChannel('projects_hub_live_v3') : null;
 
 const statusMap = {
   active:{ar:'نشط',en:'Active',cls:'b-active'},
@@ -2303,11 +2303,25 @@ renderAll();
 const __initDept = getDepartmentProgressData();
 renderAIChart('bar', __initDept.labels, __initDept.values);
 renderAISupportDashboard({labels:__initDept.labels, values:__initDept.values, type:'bar'}, t('اعرض تقدم الأقسام كشارت','Show department progress as a chart'));
+
+window.getAppStore = () => store;
+window.setAppStore = (nextStore) => { store = nextStore; };
+window.renderAllApp = () => renderAll();
+window.showNotifyApp = (msg) => showNotify(msg);
+window.getStorageKey = () => STORAGE_KEY;
+window.replacePersist = (fn) => { persist = fn; };
+window.getPersist = () => persist;
 </script>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCinS3afeNZ2-5zzeG51nF2_2FwsvjMyq0",
@@ -2325,54 +2339,93 @@ let remoteReady = false;
 async function ensureRemoteInitialized() {
   try {
     const snap = await getDoc(remoteDocRef);
+
     if (!snap.exists()) {
-      await setDoc(remoteDocRef, { store });
+      await setDoc(remoteDocRef, { store: window.getAppStore() });
     }
+
     remoteReady = true;
+
+    const syncTag = document.getElementById("syncTag");
+    const syncModeHint = document.getElementById("syncModeHint");
+
+    if (syncTag) syncTag.textContent = "Firebase Live Sync";
+    if (syncModeHint) {
+      syncModeHint.textContent = "Cloud mode";
+      syncModeHint.style.background = "rgba(106,171,152,.15)";
+      syncModeHint.style.color = "#4d8f7e";
+    }
   } catch (err) {
     console.error("Firebase init error:", err);
+
+    const syncTag = document.getElementById("syncTag");
+    const syncModeHint = document.getElementById("syncModeHint");
+
+    if (syncTag) syncTag.textContent = "Sync Error";
+    if (syncModeHint) {
+      syncModeHint.textContent = "Firebase failed";
+      syncModeHint.style.background = "rgba(192,80,80,.12)";
+      syncModeHint.style.color = "#c05050";
+    }
   }
 }
 
-onSnapshot(remoteDocRef, (snapshot) => {
-  if (!snapshot.exists()) return;
-  const data = snapshot.data();
-  if (!data || !data.store) return;
+onSnapshot(
+  remoteDocRef,
+  (snapshot) => {
+    if (!snapshot.exists()) return;
 
-  const incoming = JSON.stringify(data.store);
-  const current = JSON.stringify(store);
+    const data = snapshot.data();
+    if (!data || !data.store) return;
 
-  if (incoming === current) return;
+    const incoming = JSON.stringify(data.store);
+    const current = JSON.stringify(window.getAppStore());
 
-  isApplyingRemoteUpdate = true;
-  store = data.store;
+    if (incoming === current) return;
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  renderAll();
+    isApplyingRemoteUpdate = true;
 
-  setTimeout(() => {
-    isApplyingRemoteUpdate = false;
-  }, 100);
-}, (error) => {
-  console.error("Firebase listener error:", error);
-});
+    window.setAppStore(data.store);
+    localStorage.setItem(window.getStorageKey(), JSON.stringify(data.store));
+    window.renderAllApp();
 
-const originalPersist = persist;
-persist = async function(notifyText=''){
+    setTimeout(() => {
+      isApplyingRemoteUpdate = false;
+    }, 150);
+  },
+  (error) => {
+    console.error("Firebase listener error:", error);
+
+    const syncTag = document.getElementById("syncTag");
+    const syncModeHint = document.getElementById("syncModeHint");
+
+    if (syncTag) syncTag.textContent = "Listener Error";
+    if (syncModeHint) {
+      syncModeHint.textContent = "Check console";
+      syncModeHint.style.background = "rgba(192,80,80,.12)";
+      syncModeHint.style.color = "#c05050";
+    }
+  }
+);
+
+const originalPersist = window.getPersist();
+
+window.replacePersist(async function (notifyText = '') {
   originalPersist(notifyText);
 
   if (isApplyingRemoteUpdate) return;
   if (!remoteReady) return;
 
   try {
-    await setDoc(remoteDocRef, { store });
+    await setDoc(remoteDocRef, {
+      store: window.getAppStore()
+    });
   } catch (err) {
     console.error("Firebase save error:", err);
   }
-};
+});
 
 ensureRemoteInitialized();
 </script>
-
 </body>
 </html>
