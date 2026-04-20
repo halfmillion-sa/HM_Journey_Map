@@ -2353,11 +2353,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
+self.FIRESTORE_LONG_POLLING = true;
+
 const db = initializeFirestore(app, {
   experimentalForceLongPolling: true
-});
-
-self.FIRESTORE_LONG_POLLING = true;
 });
 
 const remoteDocRef = doc(db, "hm_journey", "main");
