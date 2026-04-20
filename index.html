@@ -2304,5 +2304,72 @@ const __initDept = getDepartmentProgressData();
 renderAIChart('bar', __initDept.labels, __initDept.values);
 renderAISupportDashboard({labels:__initDept.labels, values:__initDept.values, type:'bar'}, t('اعرض تقدم الأقسام كشارت','Show department progress as a chart'));
 </script>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const remoteDocRef = doc(db, "hm_journey", "main");
+
+let isApplyingRemoteUpdate = false;
+let remoteReady = false;
+
+// أول مرة: يرفع البيانات إذا Firebase فاضي
+async function ensureRemoteInitialized() {
+  try {
+    const snap = await getDoc(remoteDocRef);
+    if (!snap.exists()) {
+      await setDoc(remoteDocRef, { store });
+    }
+    remoteReady = true;
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// استماع مباشر (أي تحديث يجي لكل الأجهزة)
+onSnapshot(remoteDocRef, (snapshot) => {
+  if (!snapshot.exists()) return;
+  const data = snapshot.data();
+  if (!data || !data.store) return;
+
+  const incoming = JSON.stringify(data.store);
+  const current = JSON.stringify(store);
+
+  if (incoming === current) return;
+
+  isApplyingRemoteUpdate = true;
+  store = data.store;
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  renderAll();
+
+  setTimeout(() => {
+    isApplyingRemoteUpdate = false;
+  }, 100);
+});
+
+// ربط الحفظ مع Firebase
+const originalPersist = persist;
+persist = async function(notifyText=''){
+  originalPersist(notifyText);
+
+  if (isApplyingRemoteUpdate) return;
+  if (!remoteReady) return;
+
+  await setDoc(remoteDocRef, { store });
+};
+
+ensureRemoteInitialized();
+</script>
+
 </body>
 </html>
