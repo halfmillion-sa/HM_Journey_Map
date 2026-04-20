@@ -2304,7 +2304,6 @@ const __initDept = getDepartmentProgressData();
 renderAIChart('bar', __initDept.labels, __initDept.values);
 renderAISupportDashboard({labels:__initDept.labels, values:__initDept.values, type:'bar'}, t('اعرض تقدم الأقسام كشارت','Show department progress as a chart'));
 
-<script>
 window.getAppStore = () => store;
 window.setAppStore = (newStore) => { store = newStore; };
 window.renderAllApp = () => renderAll();
