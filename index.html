@@ -2354,8 +2354,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true
+  experimentalForceLongPolling: true,
+  useFetchStreams: false
 });
+
 const remoteDocRef = doc(db, "hm_journey", "main");
 
 let isApplyingRemoteUpdate = false;
@@ -2381,7 +2383,11 @@ function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7
 
 async function ensureRemoteInitialized() {
   try {
+    console.log("Trying Firestore...");
+    console.log("navigator.onLine =", navigator.onLine);
+
     const snap = await getDoc(remoteDocRef);
+    console.log("Firestore connected. Exists =", snap.exists());
 
     if (!snap.exists()) {
       await setDoc(remoteDocRef, {
@@ -2396,19 +2402,21 @@ async function ensureRemoteInitialized() {
       window.showNotifyApp("تم تفعيل المزامنة السحابية");
     }
   } catch (err) {
-    console.error("Firebase init error:", err);
+    console.error("Firebase init error full:", err);
+    console.log("navigator.onLine at init =", navigator.onLine);
+
     setSyncState(
       "Sync Error",
       err?.message || "Firebase init failed",
       "rgba(192,80,80,.12)",
       "#c05050"
     );
+
     if (window.showNotifyApp) {
       window.showNotifyApp("فشل ربط Firebase: " + (err?.message || "Unknown error"));
     }
   }
 }
-
 onSnapshot(
   remoteDocRef,
   (snapshot) => {
