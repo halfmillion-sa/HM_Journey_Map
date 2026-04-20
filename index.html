@@ -2322,7 +2322,6 @@ const remoteDocRef = doc(db, "hm_journey", "main");
 let isApplyingRemoteUpdate = false;
 let remoteReady = false;
 
-// أول مرة: يرفع البيانات إذا Firebase فاضي
 async function ensureRemoteInitialized() {
   try {
     const snap = await getDoc(remoteDocRef);
@@ -2331,11 +2330,10 @@ async function ensureRemoteInitialized() {
     }
     remoteReady = true;
   } catch (err) {
-    console.error(err);
+    console.error("Firebase init error:", err);
   }
 }
 
-// استماع مباشر (أي تحديث يجي لكل الأجهزة)
 onSnapshot(remoteDocRef, (snapshot) => {
   if (!snapshot.exists()) return;
   const data = snapshot.data();
@@ -2355,9 +2353,10 @@ onSnapshot(remoteDocRef, (snapshot) => {
   setTimeout(() => {
     isApplyingRemoteUpdate = false;
   }, 100);
+}, (error) => {
+  console.error("Firebase listener error:", error);
 });
 
-// ربط الحفظ مع Firebase
 const originalPersist = persist;
 persist = async function(notifyText=''){
   originalPersist(notifyText);
@@ -2365,7 +2364,11 @@ persist = async function(notifyText=''){
   if (isApplyingRemoteUpdate) return;
   if (!remoteReady) return;
 
-  await setDoc(remoteDocRef, { store });
+  try {
+    await setDoc(remoteDocRef, { store });
+  } catch (err) {
+    console.error("Firebase save error:", err);
+  }
 };
 
 ensureRemoteInitialized();
