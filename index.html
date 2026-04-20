@@ -683,6 +683,29 @@ var STORAGE_KEY = 'projects_hub_live_v3';
 var LANG_KEY = 'projects_hub_lang_v1';
 var bc = ('BroadcastChannel' in window) ? new BroadcastChannel('projects_hub_live_v3') : null;
 
+var syncState = {
+  label: 'Local Sync Only',
+  hint: 'Local file mode',
+  bg: 'rgba(201,136,58,.12)',
+  color: '#c9883a'
+};
+
+function updateSyncUI() {
+  const syncTag = document.getElementById('syncTag');
+  const syncModeHint = document.getElementById('syncModeHint');
+  if (syncTag) syncTag.textContent = syncState.label;
+  if (syncModeHint) {
+    syncModeHint.textContent = syncState.hint;
+    syncModeHint.style.background = syncState.bg;
+    syncModeHint.style.color = syncState.color;
+  }
+}
+
+function setSyncStateLocal(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7e") {
+  syncState = { label, hint, bg, color };
+  updateSyncUI();
+}
+
 const statusMap = {
   active:{ar:'نشط',en:'Active',cls:'b-active'},
   review:{ar:'مراجعة',en:'Review',cls:'b-review'},
@@ -858,8 +881,7 @@ function applyLang(){
     ai: t('مساعد البيانات 🤖','Data Assistant 🤖')
   };
   document.getElementById('pageTitle').textContent = sectionTitles[currentSection] || t('لوحة التحكم 👋','Dashboard 👋');
-  document.getElementById('syncTag').textContent = t('مزامنة مباشرة محلية','Local Live Sync');
-
+updateSyncUI();
   // Translate static option lists in forms and filters
   const setSelectOptions = (id, options, keepValue=true) => {
     const el = document.getElementById(id);
@@ -2331,24 +2353,23 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
-/*
-  مهم:
-  initializeFirestore بدلاً من getFirestore
-  حتى نضبط long polling من البداية قبل أي اتصال
-*/
 const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
   useFetchStreams: false
-  // إذا استمرت المشكلة جرّب بدل السطرين فوق هذا فقط:
-  // experimentalForceLongPolling: true
 });
 
 const remoteDocRef = doc(db, "hm_journey", "main");
 
 let isApplyingRemoteUpdate = false;
 let remoteReady = false;
+let saveTimer = null;
 
 function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7e") {
+  if (window.setSyncStateLocal) {
+    window.setSyncStateLocal(label, hint, bg, color);
+    return;
+  }
+
   const syncTag = document.getElementById("syncTag");
   const syncModeHint = document.getElementById("syncModeHint");
 
@@ -2373,7 +2394,9 @@ async function ensureRemoteInitialized() {
 
     remoteReady = true;
     setSyncState("Firebase Live Sync", "Cloud mode active");
-    if (window.showNotifyApp) window.showNotifyApp("تم تفعيل المزامنة السحابية");
+    if (window.showNotifyApp) {
+      window.showNotifyApp("تم تفعيل المزامنة السحابية");
+    }
   } catch (err) {
     console.error("Firebase init error:", err);
     setSyncState(
@@ -2396,10 +2419,15 @@ onSnapshot(
     const data = snapshot.data();
     if (!data || !data.store) return;
 
+    remoteReady = true;
+
     const incoming = JSON.stringify(data.store);
     const current = JSON.stringify(window.getAppStore());
 
-    if (incoming === current) return;
+    if (incoming === current) {
+      setSyncState("Firebase Live Sync", "Synced");
+      return;
+    }
 
     isApplyingRemoteUpdate = true;
 
@@ -2420,7 +2448,7 @@ onSnapshot(
 
     setTimeout(() => {
       isApplyingRemoteUpdate = false;
-    }, 150);
+    }, 200);
   },
   (error) => {
     console.error("Firebase listener error:", error);
@@ -2438,30 +2466,33 @@ onSnapshot(
 
 const originalPersist = window.getPersist();
 
-window.replacePersist(async function (notifyText = '') {
+window.replacePersist(function (notifyText = "") {
   originalPersist(notifyText);
 
   if (isApplyingRemoteUpdate) return;
   if (!remoteReady) return;
 
-  try {
-    await setDoc(remoteDocRef, {
-      store: window.getAppStore(),
-      updatedAt: new Date().toISOString()
-    });
-    setSyncState("Firebase Live Sync", "Saved to cloud");
-  } catch (err) {
-    console.error("Firebase save error:", err);
-    setSyncState(
-      "Save Error",
-      err?.message || "Write failed",
-      "rgba(192,80,80,.12)",
-      "#c05050"
-    );
-    if (window.showNotifyApp) {
-      window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await setDoc(remoteDocRef, {
+        store: window.getAppStore(),
+        updatedAt: new Date().toISOString()
+      });
+      setSyncState("Firebase Live Sync", "Saved to cloud");
+    } catch (err) {
+      console.error("Firebase save error:", err);
+      setSyncState(
+        "Save Error",
+        err?.message || "Write failed",
+        "rgba(192,80,80,.12)",
+        "#c05050"
+      );
+      if (window.showNotifyApp) {
+        window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
+      }
     }
-  }
+  }, 250);
 });
 
 ensureRemoteInitialized();
