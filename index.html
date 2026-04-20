@@ -2331,7 +2331,6 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
-/* أهم نقطة: إجبار Firestore على long polling */
 const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
   useFetchStreams: false
@@ -2339,8 +2338,9 @@ const db = initializeFirestore(app, {
 
 const remoteDocRef = doc(db, "hm_journey", "main");
 
-let isApplyingRemoteUpdate = false;
-let remoteReady = false;
+let applyingRemote = false;
+let firebaseReady = false;
+let saveTimer = null;
 
 function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7e") {
   const syncTag = document.getElementById("syncTag");
@@ -2354,7 +2354,7 @@ function setSyncState(label, hint, bg = "rgba(106,171,152,.15)", color = "#4d8f7
   }
 }
 
-async function ensureRemoteInitialized() {
+async function initFirebaseSync() {
   try {
     const snap = await getDoc(remoteDocRef);
 
@@ -2365,19 +2365,23 @@ async function ensureRemoteInitialized() {
       });
     }
 
-    remoteReady = true;
+    firebaseReady = true;
     setSyncState("Firebase Live Sync", "Cloud mode active");
-    if (window.showNotifyApp) window.showNotifyApp("تم تفعيل المزامنة السحابية");
+
+    if (window.showNotifyApp) {
+      window.showNotifyApp("تم تفعيل المزامنة السحابية");
+    }
   } catch (err) {
     console.error("Firebase init error:", err);
     setSyncState(
       "Sync Error",
-      err?.message || "Firebase init failed",
+      err?.message || "Init failed",
       "rgba(192,80,80,.12)",
       "#c05050"
     );
+
     if (window.showNotifyApp) {
-      window.showNotifyApp("فشل ربط Firebase: " + (err?.message || "Unknown error"));
+      window.showNotifyApp("فشل تهيئة Firebase: " + (err?.message || "Unknown error"));
     }
   }
 }
@@ -2388,14 +2392,17 @@ onSnapshot(
     if (!snapshot.exists()) return;
 
     const data = snapshot.data();
-    if (!data || !data.store) return;
+    if (!data?.store) return;
 
-    const incoming = JSON.stringify(data.store);
-    const current = JSON.stringify(window.getAppStore());
+    const remoteJson = JSON.stringify(data.store);
+    const localJson = JSON.stringify(window.getAppStore());
 
-    if (incoming === current) return;
+    if (remoteJson === localJson) {
+      setSyncState("Firebase Live Sync", "Synced");
+      return;
+    }
 
-    isApplyingRemoteUpdate = true;
+    applyingRemote = true;
 
     try {
       window.setAppStore(data.store);
@@ -2403,62 +2410,67 @@ onSnapshot(
       window.renderAllApp();
       setSyncState("Firebase Live Sync", "Synced");
     } catch (err) {
-      console.error("Apply remote update error:", err);
+      console.error("Remote apply error:", err);
       setSyncState(
         "Render Error",
-        err?.message || "Failed to apply remote data",
+        err?.message || "Apply failed",
         "rgba(192,80,80,.12)",
         "#c05050"
       );
     }
 
     setTimeout(() => {
-      isApplyingRemoteUpdate = false;
-    }, 150);
+      applyingRemote = false;
+    }, 200);
   },
   (error) => {
-    console.error("Firebase listener error:", error);
+    console.error("Snapshot listener error:", error);
     setSyncState(
       "Listener Error",
-      error?.message || "Check Firestore rules",
+      error?.message || "Listener failed",
       "rgba(192,80,80,.12)",
       "#c05050"
     );
+
     if (window.showNotifyApp) {
-      window.showNotifyApp("خطأ Firebase Listener: " + (error?.message || "Unknown error"));
+      window.showNotifyApp("خطأ Listener: " + (error?.message || "Unknown error"));
     }
   }
 );
 
 const originalPersist = window.getPersist();
 
-window.replacePersist(async function (notifyText = '') {
+window.replacePersist(function (notifyText = "") {
   originalPersist(notifyText);
 
-  if (isApplyingRemoteUpdate) return;
-  if (!remoteReady) return;
+  if (applyingRemote) return;
+  if (!firebaseReady) return;
 
-  try {
-    await setDoc(remoteDocRef, {
-      store: window.getAppStore(),
-      updatedAt: new Date().toISOString()
-    });
-    setSyncState("Firebase Live Sync", "Saved to cloud");
-  } catch (err) {
-    console.error("Firebase save error:", err);
-    setSyncState(
-      "Save Error",
-      err?.message || "Write failed",
-      "rgba(192,80,80,.12)",
-      "#c05050"
-    );
-    if (window.showNotifyApp) {
-      window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await setDoc(remoteDocRef, {
+        store: window.getAppStore(),
+        updatedAt: new Date().toISOString()
+      });
+      setSyncState("Firebase Live Sync", "Saved to cloud");
+    } catch (err) {
+      console.error("Firebase save error:", err);
+      setSyncState(
+        "Save Error",
+        err?.message || "Write failed",
+        "rgba(192,80,80,.12)",
+        "#c05050"
+      );
+
+      if (window.showNotifyApp) {
+        window.showNotifyApp("فشل الحفظ في Firebase: " + (err?.message || "Unknown error"));
+      }
     }
-  }
+  }, 250);
 });
 
-ensureRemoteInitialized();
+initFirebaseSync();
 </script>
 </body>
 </html>
