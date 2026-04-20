@@ -2356,7 +2356,8 @@ const app = initializeApp(firebaseConfig);
 self.FIRESTORE_LONG_POLLING = true;
 
 const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true
+  experimentalForceLongPolling: true,
+  useFetchStreams: false
 });
 
 const remoteDocRef = doc(db, "hm_journey", "main");
